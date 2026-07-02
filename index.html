@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ALERT / ERTS Packet Tool — encoder &amp; decoder</title>
+<style>
+  :root{
+    --bg:#10141a; --panel:#181e27; --panel2:#1f2733; --border:#2c3644;
+    --text:#e6ebf2; --muted:#8b98a9; --accent:#4fa3ff;
+    --c-frame:#4a5568; --c-frame-t:#c3ccd8;
+    --c-addr:#2f6fb8;  --c-addr-t:#cfe4ff;
+    --c-data:#2e8b57;  --c-data-t:#d4f5e3;
+    --c-ident:#b8860b; --c-ident-t:#ffedc2;
+    --c-crc:#7c5cbf;   --c-crc-t:#e9defc;
+    --c-batt:#b04a5a;  --c-batt-t:#ffdbe1;
+    --c-hd:#0f8a8a;    --c-hd-t:#cdf4f4;
+    --ok:#3ecf8e; --bad:#ff6b6b; --warn:#ffb347;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:26px 22px 14px;max-width:1100px;margin:0 auto}
+  header h1{margin:0 0 6px;font-size:24px}
+  header p{margin:0;color:var(--muted);max-width:75ch}
+  main{max-width:1100px;margin:0 auto;padding:0 22px 60px}
+  section{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:22px}
+  section>h2{margin:0 0 4px;font-size:19px}
+  .sub{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+  label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
+  input[type=text],input[type=number],select{
+    background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);
+    padding:9px 11px;font:14px/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;width:100%}
+  input:focus,select:focus{outline:1px solid var(--accent);border-color:var(--accent)}
+  button{background:var(--accent);border:0;border-radius:8px;color:#08111d;font-weight:600;
+    padding:10px 18px;font-size:14px;cursor:pointer}
+  button:hover{filter:brightness(1.12)}
+  button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent);font-weight:500;padding:6px 12px;font-size:12.5px}
+  .row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+  .row>div{flex:1;min-width:130px}
+  .row>.grow2{flex:3;min-width:280px}
+  .row>.fit{flex:0 0 auto;min-width:0}
+  .err{color:var(--bad);font-size:13.5px;margin-top:10px;white-space:pre-wrap}
+  .note{color:var(--muted);font-size:13px;margin-top:10px}
+  .framing-note{margin-top:12px;font-size:13.5px}
+  .framing-note b{font-weight:600}
+
+  /* bit visualisation */
+  .bitwords{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px}
+  .bitword{display:flex;flex-direction:column;gap:4px}
+  .bitword .wlabel{font-size:11px;color:var(--muted);text-align:center;letter-spacing:.4px}
+  .bitrow{display:flex}
+  .bit{width:26px;height:32px;display:flex;align-items:center;justify-content:center;
+    font:600 14px ui-monospace,Menlo,Consolas,monospace;border-right:1px solid rgba(0,0,0,.35);cursor:default}
+  .bit:first-child{border-radius:6px 0 0 6px}.bit:last-child{border-radius:0 6px 6px 0;border-right:0}
+  .bit small{display:none}
+  .lblrow{display:flex}
+  .lblrow span{width:26px;text-align:center;font:9.5px ui-monospace,Menlo,monospace;color:var(--muted)}
+  .f-frame{background:var(--c-frame);color:var(--c-frame-t)}
+  .f-A{background:var(--c-addr);color:var(--c-addr-t)}
+  .f-D{background:var(--c-data);color:var(--c-data-t)}
+  .f-K{background:var(--c-ident);color:var(--c-ident-t)}
+  .f-R,.f-C{background:var(--c-crc);color:var(--c-crc-t)}
+  .f-B,.f-BS,.f-VCO,.f-DE{background:var(--c-batt);color:var(--c-batt-t)}
+  .f-HD{background:var(--c-hd);color:var(--c-hd-t)}
+  .bit.kbad{outline:2px solid var(--bad);outline-offset:-2px}
+  .bit.hl{outline:2px solid #fff;outline-offset:-2px;filter:brightness(1.25)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:12px;font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:13px;height:13px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+
+  /* field table */
+  table.fields{border-collapse:collapse;width:100%;margin-top:14px;font-size:13.5px}
+  table.fields th{color:var(--muted);font-weight:500;text-align:left;padding:5px 10px;border-bottom:1px solid var(--border);font-size:12px;letter-spacing:.4px}
+  table.fields td{padding:6px 10px;border-bottom:1px solid rgba(44,54,68,.55);vertical-align:top}
+  table.fields tr.frow{cursor:pointer}
+  table.fields tr.frow:hover{background:var(--panel2)}
+  table.fields code{font:13px ui-monospace,Menlo,Consolas,monospace}
+  .chip{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11.5px;font-weight:600;vertical-align:1px}
+  .swatch{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:7px;vertical-align:-1px}
+  .val{font-weight:700;font-size:15px}
+  .stn{color:var(--ok);font-weight:600}
+  .stn.none{color:var(--muted);font-weight:400}
+
+  /* decode result cards */
+  .fmtcard{border:1px solid var(--border);border-radius:10px;margin-top:16px;overflow:hidden}
+  .fmtcard.best{border-color:var(--ok)}
+  .fmthead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;background:var(--panel2);cursor:pointer}
+  .fmthead h3{margin:0;font-size:15.5px;flex:1}
+  .badge{padding:2px 10px;border-radius:99px;font-size:12px;font-weight:700}
+  .badge.ok{background:rgba(62,207,142,.15);color:var(--ok)}
+  .badge.bad{background:rgba(255,107,107,.13);color:var(--bad)}
+  .badge.warn{background:rgba(255,179,71,.14);color:var(--warn)}
+  .fmtbody{padding:6px 16px 18px;display:none}
+  .fmtcard.open .fmtbody{display:block}
+  .caret{color:var(--muted);font-size:12px}
+
+  pre.jsonout{background:#0b0f14;border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;font-size:12.5px;margin-top:12px}
+  .outbits{background:#0b0f14;border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-top:14px;
+    font:15px ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+  .outbits b{color:var(--accent);font-weight:600}
+  .copybtn{margin-left:10px}
+  details.api{margin-top:22px}
+  details.api summary{cursor:pointer;color:var(--accent);font-size:14px}
+  details.api code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px}
+  details.api li{margin:6px 0;color:var(--muted)}
+  .spec{font-size:12.5px;color:var(--muted);margin-top:8px}
+  footer{max-width:1100px;margin:30px auto 0;padding:0 22px 40px;color:var(--muted);font-size:12.5px}
+  a{color:var(--accent)}
+  @media (max-width:700px){ .bit{width:19px;height:26px;font-size:11px} .lblrow span{width:19px;font-size:8px} }
+</style>
+</head>
+<body>
+<header>
+  <h1>ALERT / ERTS Packet Tool</h1>
+  <p>Decode and encode event-reporting radio telemetry (ALERT) messages per the Bureau of Meteorology
+     <em>ERTS Data Formats</em> specification (July&nbsp;2003) — ALERT Binary (ABF), BCC Extended Check,
+     Enhanced ALERT Binary (EAF) and Enhanced IFLOWS (EIF).</p>
+</header>
+<main>
+
+  <!-- ============ DECODER ============ -->
+  <section id="decodeSection">
+    <h2>Decode a message</h2>
+    <p class="sub">Paste a binary string — 40 bits (four 10-bit words including start/stop bits) or 32 bits
+       (payload only). Hex like <code>0x07D5F8FE</code> also works. The message is decoded against every
+       known format; the one that passes all checks is highlighted.</p>
+    <div class="row">
+      <div class="grow2">
+        <label for="decInput">Binary message</label>
+        <input type="text" id="decInput" spellcheck="false"
+               placeholder="e.g. 1000001110111010101011111100001111111100">
+      </div>
+      <div class="fit"><button id="decBtn">Decode</button></div>
+      <div class="fit"><button class="ghost" id="decExample">Load example</button></div>
+    </div>
+    <div id="decError" class="err" hidden></div>
+    <div id="decFraming" class="framing-note" hidden></div>
+    <div id="decResults"></div>
+  </section>
+
+  <!-- ============ ENCODER ============ -->
+  <section id="encodeSection">
+    <h2>Encode a message</h2>
+    <p class="sub">Pick a format, enter the sensor ID and raw value(s), and get the binary message back.
+       CRC / FCS bits are computed automatically. The bit map shows exactly where each value lands.</p>
+    <div class="row">
+      <div>
+        <label for="encFormat">Format</label>
+        <select id="encFormat">
+          <option value="abf">ABF — ALERT Binary</option>
+          <option value="bcc">BCC — Extended Check</option>
+          <option value="eaf">EAF — Enhanced ALERT Binary</option>
+          <option value="eif" selected>EIF — Enhanced IFLOWS</option>
+        </select>
+      </div>
+      <div>
+        <label for="encId">Sensor ID (address)</label>
+        <input type="number" id="encId" min="0" value="2784">
+      </div>
+      <div id="encDataWrap">
+        <label for="encData">Data value</label>
+        <input type="number" id="encData" min="0" max="2047" value="1599">
+      </div>
+      <div>
+        <label for="encPolarity">Framing (start/stop bits)</label>
+        <select id="encPolarity">
+          <option value="negative" selected>ALERT negative logic — start=1, stop=0</option>
+          <option value="standard">Standard async — start=0, stop=1</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" id="encExtras" style="margin-top:10px"></div>
+    <div class="note" id="encStation"></div>
+    <div class="row" style="margin-top:14px">
+      <div class="fit"><button id="encBtn">Encode</button></div>
+    </div>
+    <div id="encError" class="err" hidden></div>
+    <div id="encResult"></div>
+  </section>
+
+  <!-- ============ API ============ -->
+  <details class="api">
+    <summary>URL / API-style usage</summary>
+    <p class="sub" style="margin-top:10px">This is a static GitHub&nbsp;Pages site, so there is no server —
+      but you can drive the tool from the URL and get a JSON block back on the page. Add <code>&amp;json=1</code>
+      to show the machine-readable result (and nothing runs interactively that you didn't ask for).</p>
+    <ul>
+      <li>Decode: <code>?decode=1000001110111010101011111100001111111100</code></li>
+      <li>Decode, JSON view: <code>?decode=…&amp;json=1</code></li>
+      <li>Encode: <code>?encode=eif&amp;id=2784&amp;value=1599</code></li>
+      <li>Encode with options: <code>?encode=bcc&amp;id=700&amp;hd=3&amp;bs=12&amp;vco=1&amp;de=0&amp;polarity=standard&amp;json=1</code></li>
+      <li>Hash form also works: <code>#decode=…</code></li>
+    </ul>
+  </details>
+
+  <!-- ============ FORMAT REFERENCE ============ -->
+  <details class="api">
+    <summary>Format cheat-sheet</summary>
+    <ul>
+      <li><b>ABF</b> — 13-bit address, 11-bit data. Words 1–2 carry check bits <code>10</code>, words 3–4 carry <code>11</code>.</li>
+      <li><b>BCC Extended Check</b> — follow-up health message: 13-bit address, 5 high data bits (HD), 4 battery status bits (BS), VCO and DE error flags. Words 3–4 carry check bits <code>01</code>.</li>
+      <li><b>EAF</b> — 12-bit address, 11-bit data, battery bit B, 6 CRC bits (wind sensors substitute gust data for the CRC). Abandoned in practice.</li>
+      <li><b>EIF</b> — 13-bit address, 11-bit data, 6-bit FCS. FCS is a CRC with generator polynomial x⁶+x⁴+x³+1 over the 24 address+data bits (address then data, MSB first).</li>
+      <li>All fields are transmitted least-significant bit first; each 10-bit word is start bit + 8 payload bits + stop bit.</li>
+    </ul>
+  </details>
+
+  <pre class="jsonout" id="jsonOut" hidden></pre>
+</main>
+<footer>
+  Bit-field layouts from BoM <em>ERTS Data Formats</em> v1.0 (July 2003), Tables 3–7 &amp; Figure 1.
+  Station names from <a href="All%202021%20Working%202.txt">All 2021 Working 2.txt</a> (ALERT address location file).
+  <span id="stnStatus"></span>
+</footer>
+
+<script>
+"use strict";
+/* ================= core codec ================= */
+const CRC_POLY = 0x19; // x^6+x^4+x^3+1
+
+function bitsMsb(v, n){ const r=[]; for(let i=n-1;i>=0;i--) r.push((v>>i)&1); return r; }
+function crc6(bits){
+  let reg=0;
+  for(const b of bits){ const fb=((reg>>5)&1)^b; reg=(reg<<1)&0x3f; if(fb) reg^=CRC_POLY; }
+  return reg;
+}
+function eifCrc(a,d){ return crc6(bitsMsb(a,13).concat(bitsMsb(d,11))); }
+function eafCrc(a,d,b){ return crc6(bitsMsb(a,12).concat(bitsMsb(d,11),[b&1])); }
+
+function A(i){return{f:'A',i}} function D(i){return{f:'D',i}}
+function K(e){return{f:'K',expect:e}}
+function HD(i){return{f:'HD',i}} function BS(i){return{f:'BS',i}}
+function C(i){return{f:'C',i}} function R(i){return{f:'R',i}}
+const B0={f:'B',i:0}, VCO={f:'VCO',i:0}, DE={f:'DE',i:0};
+
+const FIELD_META = {
+  A:  {label:'Address (sensor ID)', cls:'f-A'},
+  D:  {label:'Data value',          cls:'f-D'},
+  K:  {label:'Format ID / check bits', cls:'f-K'},
+  R:  {label:'FCS (CRC-6)',         cls:'f-R'},
+  C:  {label:'CRC / wind-gust bits',cls:'f-C'},
+  B:  {label:'Battery status bit',  cls:'f-B'},
+  BS: {label:'Battery status',      cls:'f-BS'},
+  VCO:{label:'VCO error flag',      cls:'f-VCO'},
+  DE: {label:'Data error flag',     cls:'f-DE'},
+  HD: {label:'High data bits (D11–D15)', cls:'f-HD'},
+  frame:{label:'Start / stop bits', cls:'f-frame'},
+};
+
+const FORMATS = {
+  abf: { key:'abf', name:'ALERT Binary Format (ABF)', short:'ABF',
+    map:[A(0),A(1),A(2),A(3),A(4),A(5),K(1),K(0),
+         A(6),A(7),A(8),A(9),A(10),A(11),K(1),K(0),
+         A(12),D(0),D(1),D(2),D(3),D(4),K(1),K(1),
+         D(5),D(6),D(7),D(8),D(9),D(10),K(1),K(1)],
+    abits:13, note:'The standard format used in Australia. No CRC — validity rests on the fixed check bits alone.' },
+  bcc: { key:'bcc', name:'BCC Extended Check Format', short:'BCC',
+    map:[A(0),A(1),A(2),A(3),A(4),A(5),K(1),K(0),
+         A(6),A(7),A(8),A(9),A(10),A(11),K(1),K(0),
+         A(12),HD(0),HD(1),HD(2),HD(3),HD(4),K(0),K(1),
+         BS(0),BS(1),BS(2),BS(3),VCO,DE,K(0),K(1)],
+    abits:13, note:'Health/check message sent after a binary check signal. HD carries bits 11–15 of the full 16-bit stored value; BS is battery status; VCO and DE are error flags.' },
+  eaf: { key:'eaf', name:'Enhanced ALERT Binary Format (EAF)', short:'EAF',
+    map:[A(0),A(1),A(2),A(3),A(4),A(5),K(1),K(1),
+         A(6),A(7),A(8),A(9),A(10),A(11),D(0),D(1),
+         D(2),D(3),D(4),D(5),D(6),D(7),D(8),D(9),
+         D(10),B0,C(5),C(4),C(3),C(2),C(1),C(0)],
+    abits:12, note:'12-bit address (0–4095), battery bit B, 6 CRC bits. Wind sensors substitute gust data for the CRC. The BoM document does not define the EAF CRC algorithm — the check shown here assumes the same x⁶+x⁴+x³+1 CRC as EIF, computed over address, data and B.' },
+  eif: { key:'eif', name:'Enhanced IFLOWS Format (EIF)', short:'EIF',
+    map:[A(0),A(1),A(2),A(3),A(4),A(5),K(1),K(1),
+         A(6),A(7),A(8),A(9),A(10),A(11),A(12),D(0),
+         D(1),D(2),D(3),D(4),D(5),D(6),D(7),D(8),
+         D(9),D(10),R(5),R(4),R(3),R(2),R(1),R(0)],
+    abits:13, note:'13-bit address, 11-bit data, 6-bit FCS (CRC, generator polynomial x⁶+x⁴+x³+1 over address then data, MSB first).' },
+};
+
+function normaliseInput(raw){
+  let s = String(raw||'').trim().replace(/[\s,_.\-]+/g,'');
+  if(/^0x[0-9a-f]+$/i.test(s)){
+    const hex = s.slice(2);
+    if(hex.length!==8) return {ok:false,error:'Hex input must be exactly 8 hex digits (32 bits).'};
+    s=[...hex].map(h=>parseInt(h,16).toString(2).padStart(4,'0')).join('');
+  }
+  if(!/^[01]+$/.test(s)) return {ok:false,error:'Input must be a binary string of 0s and 1s (spaces allowed), or hex like 0x07D5F8FE.'};
+  if(s.length===32) return {ok:true,bits32:s,framing:{present:false}};
+  if(s.length!==40) return {ok:false,error:'Expected 40 bits (framed, 4 × 10-bit words) or 32 bits (payload only) — got '+s.length+' bits.'};
+  const words=[0,10,20,30].map(i=>s.slice(i,i+10));
+  const test=(st,sp)=>words.every(w=>w[0]===st&&w[9]===sp);
+  let polarity=null, valid=false;
+  if(test('1','0')){polarity='negative';valid=true;}
+  else if(test('0','1')){polarity='standard';valid=true;}
+  const bits32=words.map(w=>w.slice(1,9)).join('');
+  return {ok:true,bits32,bits40:s,framing:{present:true,polarity,valid,
+    detail: valid ? (polarity==='negative'?'start = 1, stop = 0 (ALERT negative logic)':'start = 0, stop = 1 (standard async)')
+                  : 'start/stop bits are inconsistent across the four words — framing ignored, middle 8 bits of each word taken as payload.'}};
+}
+
+function decodeFormat(fmtKey,bits32){
+  const fmt=FORMATS[fmtKey];
+  const vals={}; let identOk=true; const identErrors=[];
+  fmt.map.forEach((cell,pos)=>{
+    const bit=bits32[pos]==='1'?1:0;
+    if(cell.f==='K'){ if(bit!==cell.expect){identOk=false;identErrors.push(pos);} }
+    else (vals[cell.f]=vals[cell.f]||[])[cell.i]=bit;
+  });
+  const num={};
+  for(const [f,arr] of Object.entries(vals)) num[f]=arr.reduce((a,b,i)=>a+(b<<i),0);
+  const out={format:fmtKey,name:fmt.name,identOk,identErrors,values:num};
+  if(fmtKey==='eif'){ out.crcExpected=eifCrc(num.A,num.D); out.crcOk=out.crcExpected===num.R; }
+  if(fmtKey==='eaf'){ out.crcExpected=eafCrc(num.A,num.D,num.B); out.crcOk=out.crcExpected===num.C; out.crcAssumed=true; }
+  out.valid = identOk && (out.crcOk!==false);
+  return out;
+}
+function decodeAll(bits32){ return Object.keys(FORMATS).map(k=>decodeFormat(k,bits32)); }
+
+function encodeFormat(fmtKey,values,polarity){
+  const fmt=FORMATS[fmtKey];
+  const v=Object.assign({},values);
+  const lim=(name,val,bits)=>{
+    if(val==null||isNaN(val)) throw new Error('Missing value for '+name+'.');
+    if(val<0||val>(1<<bits)-1) throw new Error(name+' must be 0–'+((1<<bits)-1)+' for this format (got '+val+').');
+  };
+  lim('Sensor ID',v.A,fmt.abits);
+  if(fmtKey==='abf'){ lim('Data value',v.D,11); }
+  if(fmtKey==='bcc'){ v.HD=v.HD||0; v.BS=v.BS||0; v.VCO=v.VCO?1:0; v.DE=v.DE?1:0;
+    lim('HD (high data bits)',v.HD,5); lim('BS (battery status)',v.BS,4); }
+  if(fmtKey==='eaf'){ lim('Data value',v.D,11); v.B=v.B?1:0; v.C=eafCrc(v.A,v.D,v.B); }
+  if(fmtKey==='eif'){ lim('Data value',v.D,11); v.R=eifCrc(v.A,v.D); }
+  let bits32='';
+  fmt.map.forEach(cell=>{ bits32 += cell.f==='K' ? cell.expect : ((v[cell.f]>>cell.i)&1); });
+  const st=polarity==='standard'?'0':'1', sp=polarity==='standard'?'1':'0';
+  let bits40='';
+  for(let w=0;w<4;w++) bits40 += st + bits32.slice(w*8,w*8+8) + sp;
+  const hex='0x'+parseInt(bits32,2).toString(16).toUpperCase().padStart(8,'0');
+  return {format:fmtKey,values:v,bits32,bits40,hex,polarity:polarity==='standard'?'standard':'negative'};
+}
+
+/* ================= station name lookup ================= */
+let STATIONS=null; // Map id -> name
+async function loadStations(){
+  const el=document.getElementById('stnStatus');
+  try{
+    const res=await fetch(encodeURI('All 2021 Working 2.txt'));
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const buf=await res.arrayBuffer();
+    let text;
+    const u8=new Uint8Array(buf);
+    if(u8[0]===0xFF&&u8[1]===0xFE) text=new TextDecoder('utf-16le').decode(buf);
+    else if(u8[0]===0xFE&&u8[1]===0xFF) text=new TextDecoder('utf-16be').decode(buf);
+    else text=new TextDecoder('utf-8').decode(buf);
+    text=text.replace(/^﻿/,'');
+    STATIONS=new Map();
+    for(const line of text.split(/\r?\n/)){
+      if(!line.startsWith(' ')) continue;              // address file rule: data lines start with a space
+      const m=line.match(/^\s*(\d+)\s+(.*\S)/);
+      if(m && !STATIONS.has(+m[1])) STATIONS.set(+m[1], m[2]);
+    }
+    el.textContent=' Loaded '+STATIONS.size+' station addresses.';
+    refreshEncStation();
+    if(lastDecode) runDecode(lastDecode.input,false); // re-render with names
+    handleUrl(); // refresh URL-driven output now that names are available
+  }catch(e){
+    STATIONS=new Map();
+    el.textContent=' Station name file could not be loaded ('+e.message+') — decoding still works, names unavailable.';
+  }
+}
+function stationName(id){
+  if(!STATIONS) return {text:'loading…',none:true};
+  const n=STATIONS.get(id);
+  return n ? {text:n,none:false} : {text:'not found in address file',none:true};
+}
+
+/* ================= rendering helpers ================= */
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// Build a per-bit description list for the full framed (40) or unframed (32) message.
+function bitCells(fmtKey,bits,framed){
+  const map=FORMATS[fmtKey].map;
+  const cells=[];
+  if(framed){
+    for(let w=0;w<4;w++){
+      cells.push({bit:bits[w*10],f:'frame',lbl:'S'});
+      for(let i=0;i<8;i++){
+        const cell=map[w*8+i];
+        cells.push({bit:bits[w*10+1+i],f:cell.f,lbl:cell.f==='K'?'K':cell.f+(cell.i!==undefined?cell.i:''),cell});
+      }
+      cells.push({bit:bits[w*10+9],f:'frame',lbl:'E'});
+    }
+  }else{
+    for(let p=0;p<32;p++){
+      const cell=map[p];
+      cells.push({bit:bits[p],f:cell.f,lbl:cell.f==='K'?'K':cell.f+(cell.i!==undefined?cell.i:''),cell});
+    }
+  }
+  return cells;
+}
+
+function renderBitMap(fmtKey,bits,framed,identErrors,uid){
+  const cells=bitCells(fmtKey,bits,framed);
+  const per=framed?10:8;
+  let html='<div class="bitwords" data-uid="'+uid+'">';
+  for(let w=0;w<4;w++){
+    html+='<div class="bitword"><div class="wlabel">Word '+(w+1)+'</div><div class="bitrow">';
+    let lbls='';
+    for(let i=0;i<per;i++){
+      const c=cells[w*per+i];
+      const payloadPos = framed ? (w*8 + i - 1) : (w*8+i);
+      const bad = c.f==='K' && identErrors && identErrors.includes(payloadPos);
+      html+='<div class="bit '+FIELD_META[c.f].cls+(bad?' kbad':'')+'" data-f="'+c.f+'" title="'+esc(FIELD_META[c.f].label+(c.cell&&c.cell.i!==undefined?' — bit '+c.cell.i:''))+'">'+c.bit+'</div>';
+      lbls+='<span>'+c.lbl+'</span>';
+    }
+    html+='</div><div class="lblrow">'+lbls+'</div></div>';
+  }
+  html+='</div>';
+  return html;
+}
+
+function legendHtml(fields){
+  return '<div class="legend">'+fields.map(f=>'<span><i style="background:var(--c-'+
+    ({A:'addr',D:'data',K:'ident',R:'crc',C:'crc',B:'batt',BS:'batt',VCO:'batt',DE:'batt',HD:'hd',frame:'frame'}[f])+
+    ')"></i>'+esc(FIELD_META[f].label)+'</span>').join('')+'</div>';
+}
+
+function fieldRows(fmtKey,dec,bits32){
+  const fmt=FORMATS[fmtKey];
+  const rows=[];
+  const positions={};
+  fmt.map.forEach((c,p)=>{ if(c.f!=='K'){ (positions[c.f]=positions[c.f]||[]).push(p); } });
+  const order=['A','D','HD','BS','B','VCO','DE','R','C'];
+  for(const f of order){
+    if(!(f in dec.values)) continue;
+    const pos=positions[f];
+    const nbits=pos.length;
+    const v=dec.values[f];
+    const binMsb=v.toString(2).padStart(nbits,'0');
+    let extra='';
+    if(f==='A'){
+      const s=stationName(v);
+      extra='<div>Station name: <span class="stn'+(s.none?' none':'')+'">'+esc(s.text)+'</span></div>';
+    }
+    if(f==='HD') extra='<div class="spec">Full 16-bit value = HD × 2048 + last transmitted 11-bit data value = '+(v*2048)+' + data.</div>';
+    if((f==='R'||f==='C') && dec.crcExpected!==undefined){
+      extra='<div class="spec">Computed '+(f==='R'?'FCS':'CRC')+': '+dec.crcExpected+' — '+
+        (dec.crcOk?'<span style="color:var(--ok)">matches ✓</span>':'<span style="color:var(--bad)">mismatch ✗</span>')+
+        (dec.crcAssumed?' (algorithm assumed, see note below; for wind sensors these bits are gust data instead)':'')+'</div>';
+    }
+    rows.push('<tr class="frow" data-f="'+f+'">'+
+      '<td><span class="swatch" style="background:var(--c-'+({A:'addr',D:'data',R:'crc',C:'crc',B:'batt',BS:'batt',VCO:'batt',DE:'batt',HD:'hd'}[f])+')"></span>'+esc(FIELD_META[f].label)+'</td>'+
+      '<td><code>'+binMsb+'</code><div class="spec">'+nbits+' bit'+(nbits>1?'s':'')+', sent '+((f==='R'||f==='C')?'MSB':'LSB')+' first</div></td>'+
+      '<td><span class="val">'+v+'</span>'+extra+'</td></tr>');
+  }
+  return '<table class="fields"><thead><tr><th>FIELD</th><th>BITS (MSB→LSB)</th><th>VALUE</th></tr></thead><tbody>'+rows.join('')+'</tbody></table>';
+}
+
+function attachHover(container){
+  container.querySelectorAll('tr.frow').forEach(tr=>{
+    const f=tr.dataset.f;
+    const card=tr.closest('.fmtbody, .encout')||container;
+    tr.addEventListener('mouseenter',()=>card.querySelectorAll('.bit[data-f="'+f+'"]').forEach(b=>b.classList.add('hl')));
+    tr.addEventListener('mouseleave',()=>card.querySelectorAll('.bit[data-f="'+f+'"]').forEach(b=>b.classList.remove('hl')));
+  });
+}
+
+/* ================= decoder UI ================= */
+let lastDecode=null;
+function runDecode(input,scroll){
+  const errEl=document.getElementById('decError');
+  const frEl=document.getElementById('decFraming');
+  const resEl=document.getElementById('decResults');
+  errEl.hidden=true; frEl.hidden=true; resEl.innerHTML='';
+  const n=normaliseInput(input);
+  if(!n.ok){ errEl.textContent=n.error; errEl.hidden=false; return null; }
+  lastDecode={input};
+  if(n.framing.present){
+    frEl.innerHTML='Framing: '+(n.framing.valid?'<b style="color:var(--ok)">valid</b> — ':'<b style="color:var(--warn)">inconsistent</b> — ')+esc(n.framing.detail)+
+      '. Payload (32 bits): <code>'+n.bits32+'</code>';
+  }else{
+    frEl.innerHTML='32-bit payload supplied (no start/stop bits).';
+  }
+  frEl.hidden=false;
+  const results=decodeAll(n.bits32);
+  const validOnes=results.filter(r=>r.valid);
+  const best=validOnes.length===1?validOnes[0].format:null;
+  const ordered=[...results].sort((a,b)=>(b.valid?1:0)-(a.valid?1:0));
+  ordered.forEach((r,idx)=>{
+    const fmt=FORMATS[r.format];
+    const badges=[];
+    badges.push(r.identOk?'<span class="badge ok">check bits ✓</span>':'<span class="badge bad">check bits ✗</span>');
+    if(r.crcOk!==undefined) badges.push(r.crcOk?'<span class="badge ok">'+(r.format==='eif'?'FCS':'CRC')+' ✓</span>'
+                                               :'<span class="badge '+(r.crcAssumed?'warn':'bad')+'">'+(r.format==='eif'?'FCS':'CRC')+' ✗</span>');
+    if(r.format===best) badges.unshift('<span class="badge ok">BEST MATCH</span>');
+    const open=r.valid||validOnes.length===0;
+    const s=stationName(r.values.A);
+    const summary = r.valid
+      ? 'ID '+r.values.A+(r.values.D!==undefined?' · value '+r.values.D:'')+' · '+esc(s.text)
+      : 'not a valid '+fmt.short+' message';
+    const uid='dec-'+r.format;
+    let body='';
+    body+=renderBitMap(r.format,n.framing.present?n.bits40:n.bits32,n.framing.present,r.identErrors,uid);
+    const legendFields=[...new Set(fmt.map.map(c=>c.f))]; if(n.framing.present) legendFields.push('frame');
+    body+=legendHtml(legendFields);
+    body+=fieldRows(r.format,r,n.bits32);
+    body+='<p class="spec">'+esc(fmt.note)+'</p>';
+    if(r.format!=='bcc' && r.values.A!==undefined && r.values.D!==undefined)
+      body+='<button class="ghost" onclick="prefillEncoder(\''+r.format+'\','+r.values.A+','+r.values.D+')">Open in encoder</button>';
+    resEl.insertAdjacentHTML('beforeend',
+      '<div class="fmtcard'+(r.format===best?' best':'')+(open?' open':'')+'" id="card-'+r.format+'">'+
+        '<div class="fmthead" onclick="this.parentElement.classList.toggle(\'open\')">'+
+          '<h3>'+esc(fmt.name)+'</h3>'+badges.join(' ')+
+          '<span class="caret">'+esc(summary)+' ▾</span></div>'+
+        '<div class="fmtbody">'+body+'</div></div>');
+  });
+  attachHover(resEl);
+  if(scroll) document.getElementById('decodeSection').scrollIntoView({behavior:'smooth'});
+  // JSON payload for API mode
+  return {
+    input:String(input).trim(), bits40:n.bits40||null, bits32:n.bits32,
+    framing:n.framing,
+    formats:Object.fromEntries(results.map(r=>[r.format,{
+      name:r.name, valid:r.valid, checkBitsOk:r.identOk,
+      crcOk:r.crcOk!==undefined?r.crcOk:null, crcExpected:r.crcExpected!==undefined?r.crcExpected:null,
+      values:r.values,
+      stationName: r.values.A!==undefined && STATIONS ? (STATIONS.get(r.values.A)||null) : null
+    }])),
+    bestMatch:best
+  };
+}
+
+/* ================= encoder UI ================= */
+const ENC_EXTRAS={
+  abf:[], eif:[],
+  eaf:[{id:'encB',label:'Battery bit B (0 = good)',type:'select01'}],
+  bcc:[{id:'encHD',label:'HD — high data bits (0–31)',type:'num',max:31},
+       {id:'encBS',label:'BS — battery status (0–15)',type:'num',max:15},
+       {id:'encVCO',label:'VCO error flag',type:'select01'},
+       {id:'encDE',label:'DE data error flag',type:'select01'}],
+};
+function renderEncExtras(){
+  const fmt=document.getElementById('encFormat').value;
+  const wrap=document.getElementById('encExtras');
+  wrap.innerHTML=ENC_EXTRAS[fmt].map(x=>{
+    if(x.type==='num') return '<div><label for="'+x.id+'">'+esc(x.label)+'</label><input type="number" id="'+x.id+'" min="0" max="'+x.max+'" value="0"></div>';
+    return '<div><label for="'+x.id+'">'+esc(x.label)+'</label><select id="'+x.id+'"><option value="0" selected>0</option><option value="1">1</option></select></div>';
+  }).join('');
+  document.getElementById('encDataWrap').style.display = fmt==='bcc' ? 'none':'';
+  const idInput=document.getElementById('encId');
+  idInput.max=(1<<FORMATS[fmt].abits)-1;
+}
+function refreshEncStation(){
+  const id=parseInt(document.getElementById('encId').value,10);
+  const el=document.getElementById('encStation');
+  if(isNaN(id)){el.textContent='';return;}
+  const s=stationName(id);
+  el.innerHTML='Station name for ID '+id+': <span class="stn'+(s.none?' none':'')+'">'+esc(s.text)+'</span>';
+}
+function runEncode(fromApi){
+  const errEl=document.getElementById('encError');
+  const resEl=document.getElementById('encResult');
+  errEl.hidden=true; resEl.innerHTML='';
+  const fmt=document.getElementById('encFormat').value;
+  const polarity=document.getElementById('encPolarity').value;
+  const g=id=>{const e=document.getElementById(id);return e?parseInt(e.value,10):undefined;};
+  const values={A:g('encId')};
+  if(fmt!=='bcc') values.D=g('encData');
+  if(fmt==='eaf') values.B=g('encB')||0;
+  if(fmt==='bcc'){ values.HD=g('encHD')||0; values.BS=g('encBS')||0; values.VCO=g('encVCO')||0; values.DE=g('encDE')||0; }
+  let enc;
+  try{ enc=encodeFormat(fmt,values,polarity); }
+  catch(e){ errEl.textContent=e.message; errEl.hidden=false; return null; }
+  const dec=decodeFormat(fmt,enc.bits32);
+  const s=stationName(enc.values.A);
+  let html='<div class="encout">';
+  html+='<div class="outbits">40-bit framed:&nbsp; <b id="enc40">'+enc.bits40+'</b>'+
+    '<button class="ghost copybtn" onclick="copyTxt(\'enc40\',this)">copy</button></div>';
+  html+='<div class="outbits">32-bit payload: <b id="enc32">'+enc.bits32+'</b> &nbsp;·&nbsp; hex <b>'+enc.hex+'</b>'+
+    '<button class="ghost copybtn" onclick="copyTxt(\'enc32\',this)">copy</button></div>';
+  html+=renderBitMap(fmt,enc.bits40,true,[],'enc');
+  const legendFields=[...new Set(FORMATS[fmt].map.map(c=>c.f))]; legendFields.push('frame');
+  html+=legendHtml(legendFields);
+  html+=fieldRows(fmt,dec,enc.bits32);
+  html+='<p class="spec">'+esc(FORMATS[fmt].note)+'</p></div>';
+  resEl.innerHTML=html;
+  attachHover(resEl);
+  return {format:fmt,values:enc.values,stationName:(!s.none&&STATIONS)?s.text:null,
+          bits40:enc.bits40,bits32:enc.bits32,hex:enc.hex,framing:enc.polarity};
+}
+function copyTxt(id,btn){
+  navigator.clipboard.writeText(document.getElementById(id).textContent).then(()=>{
+    btn.textContent='copied ✓'; setTimeout(()=>btn.textContent='copy',1200);
+  });
+}
+function prefillEncoder(fmt,idv,dv){
+  document.getElementById('encFormat').value=fmt; renderEncExtras();
+  document.getElementById('encId').value=idv;
+  const d=document.getElementById('encData'); if(d)d.value=dv;
+  refreshEncStation(); runEncode();
+  document.getElementById('encodeSection').scrollIntoView({behavior:'smooth'});
+}
+
+/* ================= wiring ================= */
+const EXAMPLE='1000001110111010101011111100001111111100';
+document.getElementById('decBtn').addEventListener('click',()=>runDecode(document.getElementById('decInput').value,false));
+document.getElementById('decInput').addEventListener('keydown',e=>{if(e.key==='Enter')runDecode(e.target.value,false);});
+document.getElementById('decExample').addEventListener('click',()=>{document.getElementById('decInput').value=EXAMPLE;runDecode(EXAMPLE,false);});
+document.getElementById('encBtn').addEventListener('click',()=>runEncode(false));
+document.getElementById('encFormat').addEventListener('change',()=>{renderEncExtras();refreshEncStation();});
+document.getElementById('encId').addEventListener('input',refreshEncStation);
+renderEncExtras();
+
+/* URL / API-style entry: ?decode=…  |  ?encode=fmt&id=&value=…  (+&json=1) */
+function handleUrl(){
+  const qs=new URLSearchParams(location.search);
+  const hs=new URLSearchParams(location.hash.replace(/^#/,''));
+  const p=k=>qs.get(k)??hs.get(k);
+  const wantJson=p('json')==='1'||p('json')==='true';
+  const jsonEl=document.getElementById('jsonOut');
+  let result=null;
+  if(p('decode')){
+    document.getElementById('decInput').value=p('decode');
+    result=runDecode(p('decode'),false);
+  }else if(p('encode')){
+    const fmt=(p('encode')||'').toLowerCase();
+    if(FORMATS[fmt]){
+      document.getElementById('encFormat').value=fmt; renderEncExtras();
+      if(p('id')!=null) document.getElementById('encId').value=p('id');
+      if(p('value')!=null&&document.getElementById('encData')) document.getElementById('encData').value=p('value');
+      for(const [param,el] of [['b','encB'],['hd','encHD'],['bs','encBS'],['vco','encVCO'],['de','encDE']])
+        if(p(param)!=null&&document.getElementById(el)) document.getElementById(el).value=p(param);
+      if(p('polarity')) document.getElementById('encPolarity').value=p('polarity')==='standard'?'standard':'negative';
+      refreshEncStation();
+      result=runEncode(true);
+      document.getElementById('encodeSection').scrollIntoView();
+    }
+  }
+  if(wantJson&&result){ jsonEl.textContent=JSON.stringify(result,null,2); jsonEl.hidden=false; }
+}
+loadStations().then(()=>{ /* names loaded (or failed gracefully) */ });
+handleUrl();
+window.addEventListener('hashchange',handleUrl);
+</script>
+</body>
+</html>
